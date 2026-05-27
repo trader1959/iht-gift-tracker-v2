@@ -1,0 +1,37 @@
+{
+  "settings": {
+    "giftMaker": {
+      "fullName": "",
+      "dob": "",
+      "niNumber": "",
+      "ihtReference": "",
+      "phone": "",
+      "relationshipToRecipients": "",
+      "addressLine1": "",
+      "addressLine2": "",
+      "town": "",
+      "postcode": ""
+    },
+    "display": {
+      "fontFamily": "Arial, sans-serif",
+      "fontSize": "16px"
+    },
+    "recipients": [
+      "Child A",
+      "Child B",
+      "Grandchild A"
+    ],
+    "incomeTypes": [
+      "Salary",
+      "Pension",
+      "Rental income",
+      "Dividends",
+      "Interest"
+    ]
+  },
+  "gifts": [],
+  "allowanceGifts": [],
+  "sevenYearGifts": [],
+  "expenditures": [],
+  "expTables": {}
+}

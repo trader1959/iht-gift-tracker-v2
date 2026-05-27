@@ -1,0 +1,957 @@
+const fmt = new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' });
+    const DEFAULT_INCOME_TYPES = ['Salary', 'Pension', 'Rental income', 'Dividends', 'Interest'];
+    const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    let expMode = 'income';
+    let expYear = new Date().getFullYear();
+    let expMonth = new Date().getMonth();
+    const state = { today: '', data: { settings: { giftMaker: {}, display: {}, recipients: [], incomeTypes: [] }, gifts: [], allowanceGifts: [], expenditures: [] } };
+    function qs(selector) { return document.querySelector(selector); }
+    function qsa(selector) { return Array.from(document.querySelectorAll(selector)); }
+    async function fetchJson(url, options) { const response = await fetch(url, options || {}); if (!response.ok) { const text = await response.text(); throw new Error(text || 'Request failed'); } return response.json(); }
+    function setPage(pageId) { qsa('.page').forEach(function (page) { page.classList.toggle('active', page.id === pageId); }); qsa('[data-page-target]').forEach(function (btn) { btn.classList.toggle('active', btn.getAttribute('data-page-target') === pageId); }); if (pageId === 'addGift') { qs('#giftDate').value = state.today; qs('#giftMethod').value = 'Standing order'; qs('#giftIncomeType').value = 'Pension'; qs('#giftRecipient').value = ''; qs('#allowDate').value = state.today; renderAllowTaxYearSelect(); renderAllowanceSummary(); renderAllowanceTable(); renderIncomeGiftTaxYearSelect(); renderIncomeGiftTable(); } if (pageId === 'expenditure') { renderExpRowTable(); } if (pageId === 'reports') { buildReportTaxYearSelect(); qs('#reportOutput').innerHTML = ''; } }
+    function applyDisplaySettings() { const display = state.data.settings.display || {}; document.documentElement.style.setProperty('--font-family', display.fontFamily || 'Arial, sans-serif'); document.documentElement.style.setProperty('--font-size', display.fontSize || '16px'); }
+    function escapeHtml(value) { return String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+    function getIncomeTypes() { const types = state.data.settings.incomeTypes; return (types && types.length) ? types : DEFAULT_INCOME_TYPES.slice(); }
+    function recipientOptionsHtml() { return '<option value="">Select recipient</option>' + (state.data.settings.recipients || []).map(function (name) { return '<option value="' + escapeHtml(name) + '">' + escapeHtml(name) + '</option>'; }).join(''); }
+    function buildGiftIncomeTypeOptions() { const sel = qs('#giftIncomeType'); if (!sel) { return; } const current = sel.value; sel.innerHTML = getIncomeTypes().map(function (t) { return '<option value="' + escapeHtml(t) + '">' + escapeHtml(t) + '</option>'; }).join(''); sel.value = current || 'Pension'; }
+    function buildIncomeTypeCheckboxes() {
+      const menu = qs('#incomeTypePickerMenu'); if (!menu) { return; }
+      menu.innerHTML = getIncomeTypes().map(function (t) { return '<label class="check-row"><input type="checkbox" name="expIncomeType" value="' + escapeHtml(t) + '"><span>' + escapeHtml(t) + '</span></label>'; }).join('');
+      menu.querySelectorAll('input[name="expIncomeType"]').forEach(function (input) { input.addEventListener('change', function () { const sel = Array.from(document.querySelectorAll('input[name="expIncomeType"]:checked')).map(function (item) { return item.value; }); const summary = qs('#incomeTypePicker summary'); if (summary) { summary.textContent = sel.length ? sel.join(', ') : 'Select one or more income types'; } }); });
+    }
+    function renderIncomeTypeSettings() {
+      const container = qs('#incomeTypeList'); if (!container) { return; }
+      container.innerHTML = '';
+      getIncomeTypes().forEach(function (typeName, index) {
+        const row = document.createElement('div'); row.className = 'inline-actions'; row.style.marginBottom = '10px';
+        row.innerHTML = '<input type="text" value="' + escapeHtml(typeName) + '" data-itype-index="' + index + '"><button class="action danger" type="button" data-remove-itype="' + index + '">Remove</button>';
+        container.appendChild(row);
+      });
+      container.querySelectorAll('[data-remove-itype]').forEach(function (btn) { btn.onclick = function () { const idx = Number(btn.getAttribute('data-remove-itype')); state.data.settings.incomeTypes = getIncomeTypes(); state.data.settings.incomeTypes.splice(idx, 1); saveSettings(); }; });
+      container.querySelectorAll('[data-itype-index]').forEach(function (input) { input.onchange = function () { const idx = Number(input.getAttribute('data-itype-index')); state.data.settings.incomeTypes = getIncomeTypes(); state.data.settings.incomeTypes[idx] = input.value.trim(); saveSettings(); }; });
+    }
+    function renderRecipients() {
+      qs('#giftRecipient').innerHTML = recipientOptionsHtml();
+      const container = qs('#recipientList');
+      container.innerHTML = '';
+      (state.data.settings.recipients || []).forEach(function (name, index) {
+        const row = document.createElement('div');
+        row.className = 'inline-actions';
+        row.style.marginBottom = '10px';
+        row.innerHTML = '<input type="text" value="' + escapeHtml(name) + '" data-recipient-index="' + index + '"><button class="action danger" type="button" data-remove-recipient="' + index + '">Remove</button>';
+        container.appendChild(row);
+      });
+      qsa('[data-remove-recipient]').forEach(function (btn) { btn.onclick = function () { const idx = Number(btn.getAttribute('data-remove-recipient')); state.data.settings.recipients.splice(idx, 1); saveSettings(); }; });
+      qsa('[data-recipient-index]').forEach(function (input) { input.onchange = function () { const idx = Number(input.getAttribute('data-recipient-index')); state.data.settings.recipients[idx] = input.value.trim(); saveSettings(); }; });
+    }
+    function statHtml(label, value) { return '<div class="stat"><div class="muted">' + escapeHtml(label) + '</div><div class="num">' + escapeHtml(value) + '</div></div>'; }
+    function buildReportTaxYearSelect() {
+      const sel = qs('#reportTaxYearSelect'); if (!sel) { return; }
+      const now = new Date(); const year = now.getFullYear();
+      const boundary = new Date(year, 3, 6);
+      const curStart = now >= boundary ? year : year - 1;
+      const years = [];
+      for (let i = 0; i <= 14; i++) {
+        const sy = curStart - i;
+        years.push(sy + '/' + String(sy + 1).slice(-2));
+      }
+      const prev = sel.value;
+      sel.innerHTML = '<option value="all">All tax years</option>' +
+        years.map(function (y) { return '<option value="' + escapeHtml(y) + '">' + escapeHtml(y) + '</option>'; }).join('');
+      if (prev && (prev === 'all' || years.includes(prev))) { sel.value = prev; } else { sel.value = years[0]; }
+    }
+    function getReportTaxYear() { const sel = qs('#reportTaxYearSelect'); return sel ? sel.value : 'all'; }
+    function buildDashTaxYearSelect() {
+      const sel = qs('#dashTaxYearSelect'); if (!sel) { return; }
+      const now = new Date(); const year = now.getFullYear();
+      const boundary = new Date(year, 3, 6);
+      const curStart = now >= boundary ? year : year - 1;
+      const years = [];
+      for (let i = 0; i <= 14; i++) {
+        const sy = curStart - i;
+        years.push(sy + '/' + String(sy + 1).slice(-2));
+      }
+      const prev = sel.value;
+      sel.innerHTML = '<option value="all">All tax years</option>' +
+        years.map(function (y) { return '<option value="' + escapeHtml(y) + '">' + escapeHtml(y) + '</option>'; }).join('');
+      if (prev && (prev === 'all' || years.includes(prev))) { sel.value = prev; } else { sel.value = years[0]; }
+    }
+    function renderDashboard() {
+      buildDashTaxYearSelect();
+      const selYear = (qs('#dashTaxYearSelect') || {}).value || 'all';
+      const filterByYear = function (g) { return selYear === 'all' || taxYearLabel(g.date) === selYear; };
+      // exp key year range for expenditure filter
+      const taxYearToMonths = function (ty) {
+        if (ty === 'all') { return null; }
+        const startYear = Number(ty.split('/')[0]);
+        // Apr-Dec of startYear + Jan-Mar of startYear+1
+        const months = [];
+        for (let m = 3; m <= 11; m++) { months.push(startYear + '_' + m); }
+        for (let m = 0; m <= 2; m++) { months.push((startYear + 1) + '_' + m); }
+        return months;
+      };
+      const gifts = (state.data.gifts || []).filter(filterByYear);
+      const allowanceGifts = (state.data.allowanceGifts || []).filter(filterByYear);
+      const totalGifts = gifts.reduce(function (sum, g) { return sum + Number(g.amount || 0); }, 0);
+      const totalAllowance = allowanceGifts.reduce(function (sum, g) { return sum + Number(g.amount || 0); }, 0);
+      let totalIncome = 0; let totalExpenditure = 0;
+      const expTables = state.data.expTables || {};
+      const allowedMonths = taxYearToMonths(selYear);
+      Object.keys(expTables).forEach(function (key) {
+        const tbl = expTables[key];
+        if (!tbl || !tbl.rows) { return; }
+        if (allowedMonths) {
+          // key format: exp_YEAR_MONTH_mode
+          const parts = key.split('_'); // ['exp', year, month, mode]
+          if (parts.length < 4) { return; }
+          const ym = parts[1] + '_' + parts[2];
+          if (!allowedMonths.includes(ym)) { return; }
+        }
+        const rowSum = tbl.rows.reduce(function (s, row) { return s + (Number(row.amount) || 0); }, 0);
+        if (key.endsWith('_income')) { totalIncome += rowSum; }
+        else if (key.endsWith('_expenditure')) { totalExpenditure += rowSum; }
+      });
+      const label = selYear === 'all' ? 'All tax years' : selYear;
+      qs('#dashboardStats').innerHTML = [
+        statHtml('Tax year', label),
+        statHtml('Income gifts', String(gifts.length)),
+        statHtml('7-Year rule gifts', String((state.data.sevenYearGifts || []).filter(filterByYear).length)),
+        statHtml('Income gifts total', fmt.format(totalGifts)),
+        statHtml('Annual exemption total', fmt.format(totalAllowance)),
+        statHtml('Income tracked', fmt.format(totalIncome)),
+        statHtml('Expenditure tracked', fmt.format(totalExpenditure)),
+        statHtml('Surplus (income - exp)', fmt.format(totalIncome - totalExpenditure))
+      ].join('');
+      // merge all gift types for recent gifts table
+      const taggedGifts = gifts.map(function(g){ return Object.assign({}, g, {_type:'Income'}); });
+      const taggedAllow = allowanceGifts.map(function(g){ return Object.assign({}, g, {_type:'Exemption'}); });
+      const taggedSy = (state.data.sevenYearGifts || []).filter(filterByYear).map(function(g){ return Object.assign({}, g, {_type:'7-Year'}); });
+      const sorted = taggedGifts.concat(taggedAllow).concat(taggedSy).sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
+      const typeColors = { 'Income': '#cedcd8', 'Exemption': '#e0ced7', '7-Year': '#e0dac6' };
+      qs('#recentGiftRows').innerHTML = sorted.map(function (gift) {
+        const badge = '<span style="font-size:0.75rem;padding:2px 7px;border-radius:10px;background:' + (typeColors[gift._type]||'#eee') + ';margin-right:4px;">' + escapeHtml(gift._type) + '</span>';
+        return '<tr><td>' + escapeHtml(gift.date) + '</td><td>' + badge + escapeHtml(gift.recipient) + '</td><td>' + fmt.format(Number(gift.amount || 0)) + '</td><td>' + escapeHtml(gift.method || gift.giftType || '') + '</td><td>' + escapeHtml(gift.proofReference || '') + '</td><td></td></tr>';
+      }).join('') || '<tr><td colspan="6" class="muted">No gifts for ' + escapeHtml(label) + '.</td></tr>';
+    }
+    function populateSettingsForm() {
+      const maker = state.data.settings.giftMaker || {};
+      qs('#makerFullName').value = maker.fullName || '';
+      qs('#makerDob').value = maker.dob || '';
+      qs('#makerNi').value = maker.niNumber || '';
+      qs('#makerIhtRef').value = maker.ihtReference || '';
+      qs('#makerPhone').value = maker.phone || '';
+      qs('#makerRelation').value = maker.relationshipToRecipients || '';
+      qs('#makerAddress1').value = maker.addressLine1 || '';
+      qs('#makerAddress2').value = maker.addressLine2 || '';
+      qs('#makerTown').value = maker.town || '';
+      qs('#makerPostcode').value = maker.postcode || '';
+      qs('#fontFamily').value = state.data.settings.display.fontFamily || 'Arial, sans-serif';
+      qs('#fontSize').value = state.data.settings.display.fontSize || '16px';
+    }
+
+    async function saveSettings() { await fetchJson('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: state.data.settings }) }); applyDisplaySettings(); renderRecipients(); renderIncomeTypeSettings(); buildGiftIncomeTypeOptions(); buildIncomeTypeCheckboxes(); populateSettingsForm(); }
+    function taxYearLabel(dateText) { const date = new Date(dateText + 'T00:00:00'); const year = date.getFullYear(); const taxBoundary = new Date(year, 3, 6); if (date >= taxBoundary) { return year + '/' + String(year + 1).slice(-2); } return (year - 1) + '/' + String(year).slice(-2); }
+    function buildTaxYearReport(rows, ty) { const tyLabel = (!ty || ty === 'all') ? 'All tax years' : ty;
+      const out = qs('#reportOutput');
+      if (!rows.length) { out.innerHTML = '<p class="muted">No gifts found for ' + escapeHtml(tyLabel || 'selected period') + '.</p>'; return; }
+      const byYear = {};
+      rows.forEach(function (row) { const y = taxYearLabel(row.date); if (!byYear[y]) { byYear[y] = []; } byYear[y].push(row); });
+      let html2 = '<h2 style="margin-bottom:16px;">Tax Year Report — ' + escapeHtml(tyLabel) + '</h2>';
+      Object.keys(byYear).sort().forEach(function (year) {
+        const yearGifts = byYear[year];
+        const total = yearGifts.reduce(function (s, g) { return s + Number(g.amount || 0); }, 0);
+        html2 += '<h3 style="margin:18px 0 8px;">Tax year ' + escapeHtml(year) + ' — Total: ' + fmt.format(total) + '</h3>';
+        html2 += '<table><thead><tr><th>Date</th><th>Type</th><th>Recipient</th><th>Amount</th><th>Method / Gift type</th><th>Description</th></tr></thead><tbody>';
+        yearGifts.forEach(function (g) {
+          html2 += '<tr><td>' + escapeHtml(g.date) + '</td><td><span style="font-size:0.8rem;padding:2px 7px;border-radius:10px;background:#e5e7eb;">' + escapeHtml(g._type || 'Income') + '</span></td><td>' + escapeHtml(g.recipient) + '</td><td>' + fmt.format(Number(g.amount || 0)) + '</td><td>' + escapeHtml(g.method || g.giftType || '') + '</td><td>' + escapeHtml(g.description || '') + '</td></tr>';
+        });
+        html2 += '</tbody></table>';
+      });
+      out.innerHTML = html2;
+    }
+    function buildGeneralReport(payload, ty) { const tyLabel = (!ty || ty === 'all') ? 'All tax years' : ty;
+      const out = qs('#reportOutput');
+      const gifts = payload.gifts || [];
+      const income = payload.income || []; const allow = payload.allowance || []; const sy = payload.sevenYear || [];
+      if (!gifts.length) { out.innerHTML = '<p class="muted">No gifts found for ' + escapeHtml(tyLabel || 'selected period') + '.</p>'; return; }
+      const byRec = {}; const byYear = {}; const byType = { 'Income': 0, 'Annual Exemption': 0, '7-Year Rule': 0 }; let grand = 0;
+      gifts.forEach(function (g) {
+        const amt = Number(g.amount || 0); grand += amt;
+        const rec = g.recipient || 'Unknown'; const yr = taxYearLabel(g.date);
+        byRec[rec] = (byRec[rec] || 0) + amt; byYear[yr] = (byYear[yr] || 0) + amt;
+        if (g._type && byType[g._type] !== undefined) { byType[g._type] += amt; }
+      });
+      function giftTable(list, cols) {
+        let t = '<table><thead><tr>' + cols.map(function(c){ return '<th>' + c + '</th>'; }).join('') + '</tr></thead><tbody>';
+        list.forEach(function (g) {
+          t += '<tr><td>' + escapeHtml(g.date) + '</td><td>' + escapeHtml(g.recipient) + '</td><td>' + fmt.format(Number(g.amount||0)) + '</td>';
+          if (cols.includes('Method')) { t += '<td>' + escapeHtml(g.method || '') + '</td>'; }
+          if (cols.includes('Income type')) { t += '<td>' + escapeHtml(g.incomeType || '') + '</td>'; }
+          if (cols.includes('Gift type')) { t += '<td>' + escapeHtml(g.giftType || '') + '</td>'; }
+          if (cols.includes('Relationship')) { t += '<td>' + escapeHtml(g.relationship || '') + '</td>'; }
+          t += '<td>' + escapeHtml(g.description || '') + '</td></tr>';
+        });
+        return t + '</tbody></table>';
+      }
+      let html2 = '<h2 style="margin-bottom:16px;">General Gifts Report — ' + escapeHtml(tyLabel) + '</h2>';
+      if (income.length) {
+        html2 += '<h3 style="margin:16px 0 8px;">Gifting out of Income (' + income.length + ' gifts — ' + fmt.format(byType['Income']) + ')</h3>';
+        html2 += giftTable(income, ['Date','Recipient','Amount','Method','Income type','Description']);
+      }
+      if (allow.length) {
+        html2 += '<h3 style="margin:16px 0 8px;">Annual Exemption (' + allow.length + ' gifts — ' + fmt.format(byType['Annual Exemption']) + ')</h3>';
+        html2 += giftTable(allow, ['Date','Recipient','Amount','Relationship','Description']);
+      }
+      if (sy.length) {
+        html2 += '<h3 style="margin:16px 0 8px;">7-Year Rule (' + sy.length + ' gifts — ' + fmt.format(byType['7-Year Rule']) + ')</h3>';
+        html2 += giftTable(sy, ['Date','Recipient','Amount','Gift type','Relationship','Description']);
+      }
+      html2 += '<h3 style="margin:18px 0 8px;">By Recipient</h3><table><thead><tr><th>Recipient</th><th>Total</th></tr></thead><tbody>';
+      Object.keys(byRec).sort().forEach(function (r) { html2 += '<tr><td>' + escapeHtml(r) + '</td><td>' + fmt.format(byRec[r]) + '</td></tr>'; });
+      html2 += '</tbody></table>';
+      html2 += '<h3 style="margin:18px 0 8px;">By Tax Year</h3><table><thead><tr><th>Tax Year</th><th>Total</th></tr></thead><tbody>';
+      Object.keys(byYear).sort().forEach(function (y) { html2 += '<tr><td>' + escapeHtml(y) + '</td><td>' + fmt.format(byYear[y]) + '</td></tr>'; });
+      html2 += '</tbody></table>';
+      html2 += '<h3 style="margin:18px 0 8px;">By Gift Type</h3><table><thead><tr><th>Type</th><th>Total</th></tr></thead><tbody>';
+      Object.keys(byType).forEach(function (t2) { html2 += '<tr><td>' + escapeHtml(t2) + '</td><td>' + fmt.format(byType[t2]) + '</td></tr>'; });
+      html2 += '</tbody></table>';
+      html2 += '<p style="margin-top:14px;font-weight:700;font-size:1.05rem;">Grand total (all gift types): ' + fmt.format(grand) + '</p>';
+      out.innerHTML = html2;
+    }
+    async function loadState() {
+      const now = new Date();
+      state.today = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+      try {
+        const result = await fetchJson('/api/data');
+        state.data = result.data;
+        if (result.today) { state.today = result.today; }
+      } catch (err) {
+        console.error('loadState error', err);
+      }
+      if (!state.data.settings.incomeTypes || !state.data.settings.incomeTypes.length) { state.data.settings.incomeTypes = DEFAULT_INCOME_TYPES.slice(); }
+      if (!state.data.expTables) { state.data.expTables = {}; }
+      qs('#giftDate').value = state.today;
+      qs('#giftMethod').value = 'Standing order';
+      qs('#giftRecipient').value = '';
+      applyDisplaySettings();
+      renderRecipients();
+      renderIncomeTypeSettings();
+      buildGiftIncomeTypeOptions();
+      renderExpRowTable();
+      renderAllowanceSummary();
+      renderAllowanceTable();
+      renderDashboard();
+      populateSettingsForm();
+      qs('#reportOutput').innerHTML = '';
+      wireFormHandlers();
+    }
+    function wireFormHandlers() {
+      const giftForm = qs('#giftForm');
+      if (giftForm && !giftForm.dataset.wired) {
+        giftForm.dataset.wired = '1';
+        let uploaded = [];
+        qs('#giftProofFiles') && qs('#giftProofFiles').addEventListener('change', async function () {
+          const files = Array.from(this.files);
+          uploaded = [];
+          for (const file of files) {
+            const fd = new FormData();
+            fd.append('files', file);
+            fd.append('recipient', qs('#giftRecipient').value || '');
+            fd.append('giftType', 'income');
+            const res = await fetchJson('/api/upload-proof', { method: 'POST', body: fd });
+            if (res.files && res.files.length) { res.files.forEach(function(f){ uploaded.push(f.storedName || f); }); }
+          }
+        });
+        giftForm.addEventListener('submit', async function (ev) {
+          ev.preventDefault();
+          const payload = { date: qs('#giftDate').value, recipient: qs('#giftRecipient').value, amount: Number(qs('#giftAmount').value || 0), method: qs('#giftMethod').value, incomeType: qs('#giftIncomeType').value, proofReference: qs('#giftProofRef').value.trim(), description: qs('#giftDescription').value.trim(), notes: qs('#giftNotes').value.trim(), proofFiles: uploaded };
+          const result = await fetchJson('/api/gifts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+          state.data = result.data; renderDashboard(); renderIncomeGiftTaxYearSelect(); renderIncomeGiftTable(); giftForm.reset(); qs('#giftDate').value = state.today; qs('#giftMethod').value = 'Standing order'; uploaded = []; qs('#giftMessage').textContent = 'Gift saved.'; setTimeout(function () { qs('#giftMessage').textContent = ''; }, 3000);
+        });
+        qs('#resetGiftBtn') && qs('#resetGiftBtn').addEventListener('click', function () { giftForm.reset(); qs('#giftDate').value = state.today; qs('#giftMessage').textContent = ''; uploaded = []; });
+      }
+      const makerForm = qs('#makerForm');
+      if (makerForm && !makerForm.dataset.wired) {
+        makerForm.dataset.wired = '1';
+        makerForm.addEventListener('submit', async function (ev) {
+          ev.preventDefault();
+          state.data.settings.giftMaker = { fullName: qs('#makerFullName').value, dob: qs('#makerDob').value, niNumber: qs('#makerNi').value, ihtReference: qs('#makerIhtRef').value, phone: qs('#makerPhone').value, relationshipToRecipients: qs('#makerRelation').value, addressLine1: qs('#makerAddress1').value, addressLine2: qs('#makerAddress2').value, town: qs('#makerTown').value, postcode: qs('#makerPostcode').value };
+          await saveSettings(); qs('#makerMessage') && (qs('#makerMessage').textContent = 'Saved.'); setTimeout(function () { qs('#makerMessage') && (qs('#makerMessage').textContent = ''); }, 3000);
+        });
+      }
+      qs('#applyDisplayBtn') && qs('#applyDisplayBtn').addEventListener('click', async function () {
+        state.data.settings.display = { fontFamily: qs('#fontFamily').value, fontSize: qs('#fontSize').value };
+        await saveSettings(); qs('#displayMessage').textContent = 'Applied.'; setTimeout(function () { qs('#displayMessage').textContent = ''; }, 3000);
+      });
+      qs('#addRecipientBtn') && qs('#addRecipientBtn').addEventListener('click', async function () {
+        const input = qs('#newRecipientName'); const value = input.value.trim(); if (!value) { return; }
+        state.data.settings.recipients.push(value); input.value = ''; await saveSettings();
+      });
+      qs('#tabIncome') && qs('#tabIncome').addEventListener('click', function () {
+        ['tabIncome','tabAllowance','tab7Year'].forEach(function(id){ const b=qs('#'+id); if(b){b.classList.remove('active');} });
+        qs('#tabIncome').classList.add('active');
+        qs('#panelIncome').style.display=''; qs('#panelAllowance').style.display='none'; qs('#panel7Year').style.display='none';
+        renderIncomeGiftTaxYearSelect(); renderIncomeGiftTable();
+      });
+      qs('#incomeGiftTaxYearSelect') && qs('#incomeGiftTaxYearSelect').addEventListener('change', function () { renderIncomeGiftTable(); });
+      qs('#giftDate') && qs('#giftDate').addEventListener('change', function () {
+        const dateVal = qs('#giftDate').value; if (!dateVal) { return; }
+        const ty = taxYearLabel(dateVal);
+        const sel = qs('#incomeGiftTaxYearSelect');
+        if (sel) {
+          const existing = Array.from(sel.options).map(function (o) { return o.value; });
+          if (!existing.includes(ty)) { const opt = document.createElement('option'); opt.value = ty; opt.textContent = ty; sel.insertBefore(opt, sel.firstChild); }
+          sel.value = ty; renderIncomeGiftTable();
+        }
+      });
+      qs('#tabAllowance') && qs('#tabAllowance').addEventListener('click', function () {
+        ['tabIncome','tabAllowance','tab7Year'].forEach(function(id){ const b=qs('#'+id); if(b){b.classList.remove('active');} });
+        qs('#tabAllowance').classList.add('active');
+        qs('#panelIncome').style.display='none'; qs('#panelAllowance').style.display=''; qs('#panel7Year').style.display='none';
+        qs('#allowDate').value = state.today;
+        renderAllowanceSummary(); renderAllowanceTable();
+      });
+      qs('#tab7Year') && qs('#tab7Year').addEventListener('click', function () {
+        ['tabIncome','tabAllowance','tab7Year'].forEach(function(id){ const b=qs('#'+id); if(b){b.classList.remove('active');} });
+        qs('#tab7Year').classList.add('active');
+        qs('#panelIncome').style.display='none'; qs('#panelAllowance').style.display='none'; qs('#panel7Year').style.display='';
+        qs('#syDate').value = state.today;
+        qs('#syRecipient').innerHTML = recipientOptionsHtml();
+        renderSyTaxYearSelect(); renderSevenYearTable();
+      });
+      qs('#syTaxYearSelect') && qs('#syTaxYearSelect').addEventListener('change', function () { renderSevenYearTable(); });
+      qs('#resetSevenYearBtn') && qs('#resetSevenYearBtn').addEventListener('click', function () { qs('#sevenYearForm').reset(); qs('#syDate').value = state.today; qs('#sevenYearMessage').textContent = ''; });
+      const syForm = qs('#sevenYearForm');
+      if (syForm && !syForm.dataset.wired) {
+        syForm.dataset.wired = '1';
+        let syUploaded = [];
+        qs('#syProofFiles') && qs('#syProofFiles').addEventListener('change', async function () {
+          const files = Array.from(this.files); syUploaded = [];
+          for (const file of files) {
+            const fd = new FormData(); fd.append('files', file); fd.append('recipient', qs('#syRecipient').value || ''); fd.append('giftType', 'seven-year');
+            const res = await fetchJson('/api/upload-proof', { method: 'POST', body: fd });
+            if (res.files && res.files.length) { res.files.forEach(function(f){ syUploaded.push(f.storedName || f); }); }
+          }
+        });
+        syForm.addEventListener('submit', async function (ev) {
+          ev.preventDefault();
+          const payload = { date: qs('#syDate').value, recipient: qs('#syRecipient').value, amount: Number(qs('#syAmount').value || 0), giftType: qs('#syGiftType').value, relationship: qs('#syRelationship').value.trim(), proofReference: qs('#syProofRef').value.trim(), description: qs('#syDescription').value.trim(), notes: qs('#syNotes').value.trim(), proofFiles: syUploaded };
+          const result = await fetchJson('/api/seven-year-gifts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+          state.data = result.data; syForm.reset(); qs('#syDate').value = state.today; syUploaded = [];
+          qs('#syRecipient').innerHTML = recipientOptionsHtml();
+          renderSyTaxYearSelect(); renderSevenYearTable(); renderDashboard();
+          qs('#sevenYearMessage').textContent = 'Gift saved.'; setTimeout(function () { qs('#sevenYearMessage').textContent = ''; }, 3000);
+        });
+      }
+      const allowForm = qs('#allowanceForm');
+      if (allowForm && !allowForm.dataset.wired) {
+        allowForm.dataset.wired = '1';
+        allowForm.addEventListener('submit', async function (ev) {
+          ev.preventDefault();
+          const editId = allowForm.dataset.editId;
+          const payload = { date: qs('#allowDate').value, recipient: qs('#allowRecipient').value, amount: Number(qs('#allowAmount').value || 0), method: qs('#allowMethod').value, relationship: qs('#allowRelationship').value.trim(), proofReference: qs('#allowProofRef').value.trim(), description: qs('#allowDescription').value.trim(), notes: qs('#allowNotes').value.trim() };
+          let result;
+          if (editId) {
+            result = await fetchJson('/api/allowance-gifts/' + encodeURIComponent(editId), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            delete allowForm.dataset.editId;
+          } else {
+            result = await fetchJson('/api/allowance-gifts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+          }
+          const savedId = editId || (result.data && result.data.allowanceGifts && result.data.allowanceGifts[result.data.allowanceGifts.length - 1].id);
+          const fileInput = qs('#allowProofFiles');
+          if (fileInput && fileInput.files.length && savedId) {
+            const fd = new FormData();
+            Array.from(fileInput.files).forEach(function (f) { fd.append('files', f); });
+            const uploadResult = await fetchJson('/api/allowance-gifts/' + encodeURIComponent(savedId) + '/upload', { method: 'POST', body: fd });
+            if (uploadResult.data) { result.data = uploadResult.data; }
+          }
+          state.data = result.data; allowForm.reset(); qs('#allowDate').value = state.today;
+          renderAllowTaxYearSelect(); renderAllowanceSummary(); renderAllowanceTable();
+          qs('#allowanceMessage').textContent = editId ? 'Record updated.' : 'Exemption gift saved.';
+          setTimeout(function () { const m = qs('#allowanceMessage'); if (m) { m.textContent = ''; } }, 3000);
+        });
+        qs('#resetAllowanceBtn') && qs('#resetAllowanceBtn').addEventListener('click', function () { allowForm.reset(); delete allowForm.dataset.editId; qs('#allowDate').value = state.today; qs('#allowanceMessage').textContent = ''; });
+      }
+      qs('#stab-general') && qs('#stab-general').addEventListener('click', function () { switchSettingsTab('general'); });
+      qs('#stab-regular-income') && qs('#stab-regular-income').addEventListener('click', function () { switchSettingsTab('regular-income'); });
+      qs('#stab-regular-exp') && qs('#stab-regular-exp').addEventListener('click', function () { switchSettingsTab('regular-exp'); });
+
+      qs('#addRegIncBtn') && qs('#addRegIncBtn').addEventListener('click', async function () {
+        const name = qs('#regIncName').value.trim();
+        const amount = Number(qs('#regIncAmount').value || 0);
+        if (!name) { qs('#regIncMessage').textContent = 'Please enter a name.'; return; }
+        if (!state.data.settings.regularIncome) { state.data.settings.regularIncome = []; }
+        state.data.settings.regularIncome.push({ name: name, amount: amount, incomeType: qs('#regIncType').value, description: qs('#regIncDesc').value.trim() });
+        await saveSettings();
+        qs('#regIncName').value = ''; qs('#regIncAmount').value = ''; qs('#regIncDesc').value = '';
+        qs('#regIncMessage').textContent = 'Regular income saved.';
+        renderRegularIncomeList();
+        setTimeout(function () { const m = qs('#regIncMessage'); if (m) { m.textContent = ''; } }, 2500);
+      });
+
+      qs('#addRegExpBtn') && qs('#addRegExpBtn').addEventListener('click', async function () {
+        const name = qs('#regExpName').value.trim();
+        const amount = Number(qs('#regExpAmount').value || 0);
+        if (!name) { qs('#regExpMessage').textContent = 'Please enter a name.'; return; }
+        if (!state.data.settings.regularExpenditure) { state.data.settings.regularExpenditure = []; }
+        state.data.settings.regularExpenditure.push({ name: name, amount: amount, category: qs('#regExpCategory').value.trim(), description: qs('#regExpDesc').value.trim() });
+        await saveSettings();
+        qs('#regExpName').value = ''; qs('#regExpAmount').value = ''; qs('#regExpCategory').value = ''; qs('#regExpDesc').value = '';
+        qs('#regExpMessage').textContent = 'Regular expenditure saved.';
+        renderRegularExpList();
+        setTimeout(function () { const m = qs('#regExpMessage'); if (m) { m.textContent = ''; } }, 2500);
+      });
+
+      qs('#addRegularRowsBtn') && qs('#addRegularRowsBtn').addEventListener('click', function () {
+        const data = getExpData(expYear, expMonth, expMode);
+        const regulars = expMode === 'income' ? getRegularIncome() : getRegularExpenditure();
+        if (!regulars.length) {
+          const msg = qs('#expMessage');
+          if (msg) { msg.textContent = 'No regular ' + expMode + ' defined in Settings.'; setTimeout(function () { msg.textContent = ''; }, 3000); }
+          return;
+        }
+        // existing row names (lowercase) for duplicate check
+        const existingNames = new Set(data.rows.map(function (r) { return (r.name || '').trim().toLowerCase(); }));
+        const toAdd = [];
+        const skipped = [];
+        regulars.forEach(function (reg) {
+          const key = (reg.name || '').trim().toLowerCase();
+          if (existingNames.has(key)) { skipped.push(reg.name); return; }
+          existingNames.add(key); // prevent dups within the batch itself
+          const row = { name: reg.name, amount: reg.amount, description: reg.description || '' };
+          if (expMode === 'income') { row.incomeType = reg.incomeType || ''; }
+          else { row.category = reg.category || ''; }
+          toAdd.push(row);
+        });
+        // insert at top
+        data.rows.unshift.apply(data.rows, toAdd);
+        renderExpRowTable();
+        const msg = qs('#expMessage');
+        if (msg) {
+          if (toAdd.length && skipped.length) {
+            msg.textContent = toAdd.length + ' added; ' + skipped.length + ' skipped (already present): ' + skipped.join(', ');
+          } else if (!toAdd.length) {
+            msg.textContent = 'All regular entries already present — none added.';
+          } else {
+            msg.textContent = toAdd.length + ' regular ' + expMode + ' entries added.';
+          }
+          setTimeout(function () { msg.textContent = ''; }, 4000);
+        }
+      });
+
+      async function deleteTransactions(which, label) {
+        if (!confirm('Are you sure you want to delete ' + label + '? This cannot be undone.')) { return; }
+        const msg = qs('#deleteTransMessage');
+        if (msg) { msg.textContent = 'Deleting...'; }
+        const result = await fetchJson('/api/transactions/all?which=' + which, { method: 'DELETE' });
+        state.data = result.data;
+        if (!state.data.expTables) { state.data.expTables = {}; }
+        renderDashboard(); renderIncomeGiftTable(); renderAllowanceTable(); renderSevenYearTable(); renderExpRowTable();
+        if (msg) { msg.textContent = label + ' deleted.'; setTimeout(function () { msg.textContent = ''; }, 4000); }
+      }
+      qs('#deleteAllTransBtn') && qs('#deleteAllTransBtn').addEventListener('click', function () { deleteTransactions('all', 'ALL transactions'); });
+      qs('#deleteGiftsBtn') && qs('#deleteGiftsBtn').addEventListener('click', function () { deleteTransactions('gifts', 'all income gifts'); });
+      qs('#deleteAllowanceBtn') && qs('#deleteAllowanceBtn').addEventListener('click', function () { deleteTransactions('allowance', 'all annual exemption gifts'); });
+      qs('#deleteSevenYearBtn') && qs('#deleteSevenYearBtn').addEventListener('click', function () { deleteTransactions('sevenyear', 'all 7-year rule gifts'); });
+      qs('#deleteExpBtn') && qs('#deleteExpBtn').addEventListener('click', function () { deleteTransactions('expenditure', 'all expenditure and income records'); });
+      qs('#generateTestDataBtn') && qs('#generateTestDataBtn').addEventListener('click', async function () {
+        const count = Number(qs('#testGiftCount').value || 10);
+        const result = await fetchJson('/api/test-data/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ count: count }) });
+        state.data = result.data; renderDashboard(); qs('#testDataMessage').textContent = count + ' test gifts generated.';
+      });
+      qs('#clearTestDataBtn') && qs('#clearTestDataBtn').addEventListener('click', async function () {
+        const result = await fetchJson('/api/test-data/clear', { method: 'POST' });
+        state.data = result.data; renderDashboard(); qs('#testDataMessage').textContent = 'Test data cleared.';
+      });
+    }
+    function openEditGift(id) {
+      const gift = (state.data.gifts || []).find(function (g) { return g.id === id; });
+      if (!gift) { return; }
+      qs('#editGiftId').value = gift.id;
+      qs('#editGiftDate').value = gift.date || '';
+      qs('#editGiftRecipient').innerHTML = recipientOptionsHtml();
+      qs('#editGiftRecipient').value = gift.recipient || '';
+      qs('#editGiftAmount').value = gift.amount || '';
+      qs('#editGiftMethod').value = gift.method || 'Standing order';
+      qs('#editGiftIncomeType').innerHTML = getIncomeTypes().map(function (t) { return '<option value="' + escapeHtml(t) + '">' + escapeHtml(t) + '</option>'; }).join('');
+      qs('#editGiftIncomeType').value = gift.incomeType || '';
+      qs('#editGiftProofRef').value = gift.proofReference || '';
+      qs('#editGiftDescription').value = gift.description || '';
+      qs('#editGiftNotes').value = gift.notes || '';
+      qs('#editGiftModal').style.display = 'flex';
+    }
+    qs('#closeEditModal') && qs('#closeEditModal').addEventListener('click', function () { qs('#editGiftModal').style.display = 'none'; });
+    qs('#editGiftModal') && qs('#editGiftModal').addEventListener('click', function (e) { if (e.target === qs('#editGiftModal')) { qs('#editGiftModal').style.display = 'none'; } });
+    qs('#editGiftForm') && qs('#editGiftForm').addEventListener('submit', async function (ev) {
+      ev.preventDefault();
+      const id = qs('#editGiftId').value;
+      const payload = { date: qs('#editGiftDate').value, recipient: qs('#editGiftRecipient').value, amount: Number(qs('#editGiftAmount').value || 0), method: qs('#editGiftMethod').value, incomeType: qs('#editGiftIncomeType').value, proofReference: qs('#editGiftProofRef').value.trim(), description: qs('#editGiftDescription').value.trim(), notes: qs('#editGiftNotes').value.trim() };
+      const result = await fetchJson('/api/gifts/' + encodeURIComponent(id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      state.data = result.data; renderDashboard(); renderIncomeGiftTable(); qs('#editGiftModal').style.display = 'none';
+    });
+    function taxYearFromDate(dateText) { return taxYearLabel(dateText); }
+    function allowanceUsedInYear(taxYear) {
+      return (state.data.allowanceGifts || []).filter(function (g) { return taxYearLabel(g.date) === taxYear; }).reduce(function (s, g) { return s + Number(g.amount || 0); }, 0);
+    }
+    function allIncomeGiftTaxYears() {
+      const now = new Date(); const year = now.getFullYear(); const boundary = new Date(year, 3, 6);
+      const curStartYear = now >= boundary ? year : year - 1;
+      const years = new Set();
+      for (let i = 0; i <= 14; i++) {
+        const sy = curStartYear - i;
+        years.add(sy + '/' + String(sy + 1).slice(-2));
+      }
+      (state.data.gifts || []).forEach(function (g) { if (g.date) { years.add(taxYearLabel(g.date)); } });
+      return Array.from(years).sort().reverse();
+    }
+    function getSelectedIncomeGiftTaxYear() {
+      const sel = qs('#incomeGiftTaxYearSelect'); return sel ? sel.value : '';
+    }
+    function renderIncomeGiftTaxYearSelect() {
+      const sel = qs('#incomeGiftTaxYearSelect'); if (!sel) { return; }
+      const years = allIncomeGiftTaxYears();
+      const cur = sel.value;
+      sel.innerHTML = years.map(function (y) { return '<option value="' + escapeHtml(y) + '">' + escapeHtml(y) + '</option>'; }).join('');
+      if (cur && years.includes(cur)) { sel.value = cur; }
+    }
+    function renderIncomeGiftTable() {
+      const tbody = qs('#incomeGiftRows'); if (!tbody) { return; }
+      renderIncomeGiftTaxYearSelect();
+      const selYear = getSelectedIncomeGiftTaxYear();
+      const hdg = qs('#incomeGiftTableHeading');
+      if (hdg) { hdg.textContent = 'Gift records — ' + selYear; }
+      const gifts = (state.data.gifts || []).filter(function (g) { return !selYear || selYear === 'all' || taxYearLabel(g.date) === selYear; }).slice().sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
+      tbody.innerHTML = gifts.map(function (g) {
+        const fileList = (g.proofFiles && g.proofFiles.length) ? g.proofFiles.map(function (f) { return '<a href="/proofs/' + encodeURIComponent(f) + '" target="_blank" style="font-size:0.8rem;display:block;">' + escapeHtml(f) + '</a>'; }).join('') : '<span class="muted" style="font-size:0.8rem;">None</span>';
+        return '<tr><td>' + escapeHtml(g.date) + '</td><td>' + escapeHtml(taxYearLabel(g.date)) + '</td><td>' + escapeHtml(g.recipient || '') + '</td><td>' + fmt.format(Number(g.amount || 0)) + '</td><td>' + escapeHtml(g.incomeType || '') + '</td><td>' + escapeHtml(g.method || '') + '</td><td>' + escapeHtml(g.proofReference || '') + '</td><td>' + fileList + '</td>' +
+          '<td style="white-space:nowrap;"><button class="action ghost" style="padding:4px 10px;font-size:0.8rem;margin-right:4px;" data-edit-gift="' + escapeHtml(g.id) + '">Edit</button><button class="action danger" style="padding:4px 10px;font-size:0.8rem;" data-delete-gift="' + escapeHtml(g.id) + '">Delete</button></td></tr>';
+      }).join('') || '<tr><td colspan="9" class="muted">No income gifts for ' + escapeHtml(selYear) + '.</td></tr>';
+      tbody.querySelectorAll('[data-edit-gift]').forEach(function (btn) {
+        btn.addEventListener('click', function () { openEditGift(btn.getAttribute('data-edit-gift')); });
+      });
+      tbody.querySelectorAll('[data-delete-gift]').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+          if (!confirm('Delete this gift?')) { return; }
+          const result = await fetchJson('/api/gifts/' + encodeURIComponent(btn.getAttribute('data-delete-gift')), { method: 'DELETE' });
+          state.data = result.data; renderDashboard(); renderIncomeGiftTable();
+        });
+      });
+    }
+    function allAllowTaxYears() {
+      const now = new Date(); const year = now.getFullYear(); const boundary = new Date(year, 3, 6);
+      const curStartYear = now >= boundary ? year : year - 1;
+      const years = new Set();
+      // always include current + 6 prior tax years
+      for (let i = 0; i <= 14; i++) {
+        const sy = curStartYear - i;
+        years.add(sy + '/' + String(sy + 1).slice(-2));
+      }
+      // also include any years from existing records
+      (state.data.allowanceGifts || []).forEach(function (g) { if (g.date) { years.add(taxYearLabel(g.date)); } });
+      return Array.from(years).sort().reverse();
+    }
+    function getSelectedAllowTaxYear() {
+      const sel = qs('#allowTaxYearSelect'); return sel ? sel.value : '';
+    }
+    function renderAllowTaxYearSelect() {
+      const sel = qs('#allowTaxYearSelect'); if (!sel) { return; }
+      const years = allAllowTaxYears();
+      const cur = sel.value;
+      sel.innerHTML = '<option value="all">All tax years</option>' + years.map(function (y) { return '<option value="' + escapeHtml(y) + '">' + escapeHtml(y) + '</option>'; }).join('');
+      if (cur && (cur === 'all' || years.includes(cur))) { sel.value = cur; } else { sel.value = years[0] || 'all'; }
+    }
+    function prevTaxYearOf(taxYear) {
+      const parts = taxYear.split('/'); if (parts.length < 2) { return ''; }
+      const startYear = Number(parts[0]); return (startYear - 1) + '/' + String(startYear).slice(-2);
+    }
+    function renderAllowanceSummary() {
+      const bar = qs('#allowanceSummaryBar'); if (!bar) { return; }
+      const selYear = getSelectedAllowTaxYear();
+      const prevYear = prevTaxYearOf(selYear);
+      const curUsed = allowanceUsedInYear(selYear);
+      const prevUsed = prevYear ? allowanceUsedInYear(prevYear) : 3000;
+      const curLimit = 3000; const prevCarryOver = Math.max(0, curLimit - prevUsed);
+      const totalAvail = curLimit + prevCarryOver;
+      const remaining = Math.max(0, totalAvail - curUsed);
+      const pct = Math.min(100, Math.round((curUsed / totalAvail) * 100));
+      bar.innerHTML = '<div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:10px;">' +
+        '<div><div class="muted" style="font-size:0.85rem;">' + escapeHtml(selYear) + ' used</div><div style="font-weight:700;font-size:1.1rem;">' + fmt.format(curUsed) + ' / ' + fmt.format(totalAvail) + '</div></div>' +
+        '<div><div class="muted" style="font-size:0.85rem;">Carry-over from ' + escapeHtml(prevYear || 'prior year') + '</div><div style="font-weight:700;font-size:1.1rem;">' + fmt.format(prevCarryOver) + '</div></div>' +
+        '<div><div class="muted" style="font-size:0.85rem;">Remaining allowance</div><div style="font-weight:700;font-size:1.1rem;color:' + (remaining < 500 ? '#a12c7b' : '#01696f') + ';">' + fmt.format(remaining) + '</div></div>' +
+        '</div>' +
+        '<div style="background:#e5e7eb;border-radius:999px;height:10px;overflow:hidden;"><div style="height:100%;width:' + pct + '%;background:' + (pct >= 100 ? '#a12c7b' : '#01696f') + ';border-radius:999px;transition:width 0.4s;"></div></div>';
+    }
+    function renderAllowanceTable() {
+      const tbody = qs('#allowanceRows'); if (!tbody) { return; }
+      renderAllowTaxYearSelect();
+      qs('#allowRecipient').innerHTML = recipientOptionsHtml();
+      const selYear = getSelectedAllowTaxYear();
+      const hdg = qs('#allowanceTableHeading');
+      if (hdg) { hdg.textContent = selYear === 'all' ? 'Exemption gifts — All tax years' : 'Exemption gifts — ' + selYear; }
+      const gifts = (state.data.allowanceGifts || []).filter(function (g) { return !selYear || selYear === 'all' || taxYearLabel(g.date) === selYear; }).slice().sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
+      tbody.innerHTML = gifts.map(function (g) {
+        const fileList = (g.proofFiles && g.proofFiles.length) ? g.proofFiles.map(function (f) { return '<a href="/proofs/' + encodeURIComponent(f) + '" target="_blank" style="font-size:0.8rem;display:block;">' + escapeHtml(f) + '</a>'; }).join('') : '<span class="muted" style="font-size:0.8rem;">None</span>';
+        return '<tr><td>' + escapeHtml(g.date) + '</td><td>' + escapeHtml(taxYearLabel(g.date)) + '</td><td>' + escapeHtml(g.recipient || '') + '</td><td>' + fmt.format(Number(g.amount || 0)) + '</td><td>' + escapeHtml(g.relationship || '') + '</td><td>' + escapeHtml(g.description || '') + '</td><td>' + fileList + '</td>' +
+          '<td style="white-space:nowrap;"><button class="action ghost" style="padding:4px 10px;font-size:0.8rem;margin-right:4px;" data-edit-allow="' + escapeHtml(g.id) + '">Edit</button><button class="action danger" style="padding:4px 10px;font-size:0.8rem;" data-delete-allow="' + escapeHtml(g.id) + '">Delete</button></td></tr>';
+      }).join('') || '<tr><td colspan="8" class="muted">No annual exemption gifts for ' + escapeHtml(selYear) + '.</td></tr>';
+      tbody.querySelectorAll('[data-delete-allow]').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+          if (!confirm('Delete this exemption gift?')) { return; }
+          const result = await fetchJson('/api/allowance-gifts/' + encodeURIComponent(btn.getAttribute('data-delete-allow')), { method: 'DELETE' });
+          state.data = result.data; renderAllowTaxYearSelect(); renderAllowanceSummary(); renderAllowanceTable();
+        });
+      });
+      tbody.querySelectorAll('[data-edit-allow]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          const id = btn.getAttribute('data-edit-allow');
+          const g = (state.data.allowanceGifts || []).find(function (x) { return x.id === id; });
+          if (!g) { return; }
+          qs('#allowDate').value = g.date || '';
+          qs('#allowRecipient').value = g.recipient || '';
+          qs('#allowAmount').value = g.amount || '';
+          qs('#allowMethod').value = g.method || 'Standing order';
+          qs('#allowRelationship').value = g.relationship || '';
+          qs('#allowProofRef').value = g.proofReference || '';
+          qs('#allowDescription').value = g.description || '';
+          qs('#allowNotes').value = g.notes || '';
+          qs('#allowanceForm').dataset.editId = id;
+          qs('#allowanceMessage').textContent = 'Editing record — save to update.';
+        });
+      });
+    }
+    function getRegularIncome() { return state.data.settings.regularIncome || []; }
+    function getRegularExpenditure() { return state.data.settings.regularExpenditure || []; }
+    function renderRegularIncomeList() {
+      const list = qs('#regularIncomeList'); if (!list) { return; }
+      const items = getRegularIncome();
+      list.innerHTML = items.length ? '<table style="width:100%;border-collapse:collapse;"><thead><tr><th style="text-align:left;padding:6px 10px;">Name</th><th style="text-align:left;padding:6px 10px;">Amount</th><th style="text-align:left;padding:6px 10px;">Type</th><th style="text-align:left;padding:6px 10px;">Description</th><th></th></tr></thead><tbody>' +
+        items.map(function (item, i) {
+          return '<tr><td style="padding:6px 10px;">' + escapeHtml(item.name) + '</td><td style="padding:6px 10px;">' + fmt.format(Number(item.amount || 0)) + '</td><td style="padding:6px 10px;">' + escapeHtml(item.incomeType || '') + '</td><td style="padding:6px 10px;">' + escapeHtml(item.description || '') + '</td><td style="padding:6px 10px;"><button class="action danger" style="padding:3px 8px;font-size:0.8rem;" data-remove-reg-inc="' + i + '">Remove</button></td></tr>';
+        }).join('') + '</tbody></table>' : '<p class="muted">No regular income defined yet.</p>';
+      list.querySelectorAll('[data-remove-reg-inc]').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+          state.data.settings.regularIncome.splice(Number(btn.getAttribute('data-remove-reg-inc')), 1);
+          await saveSettings(); renderRegularIncomeList();
+        });
+      });
+    }
+    function renderRegularExpList() {
+      const list = qs('#regularExpList'); if (!list) { return; }
+      const items = getRegularExpenditure();
+      list.innerHTML = items.length ? '<table style="width:100%;border-collapse:collapse;"><thead><tr><th style="text-align:left;padding:6px 10px;">Name</th><th style="text-align:left;padding:6px 10px;">Amount</th><th style="text-align:left;padding:6px 10px;">Category</th><th style="text-align:left;padding:6px 10px;">Description</th><th></th></tr></thead><tbody>' +
+        items.map(function (item, i) {
+          return '<tr><td style="padding:6px 10px;">' + escapeHtml(item.name) + '</td><td style="padding:6px 10px;">' + fmt.format(Number(item.amount || 0)) + '</td><td style="padding:6px 10px;">' + escapeHtml(item.category || '') + '</td><td style="padding:6px 10px;">' + escapeHtml(item.description || '') + '</td><td style="padding:6px 10px;"><button class="action danger" style="padding:3px 8px;font-size:0.8rem;" data-remove-reg-exp="' + i + '">Remove</button></td></tr>';
+        }).join('') + '</tbody></table>' : '<p class="muted">No regular expenditure defined yet.</p>';
+      list.querySelectorAll('[data-remove-reg-exp]').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+          state.data.settings.regularExpenditure.splice(Number(btn.getAttribute('data-remove-reg-exp')), 1);
+          await saveSettings(); renderRegularExpList();
+        });
+      });
+    }
+    function populateRegIncTypeDropdown() {
+      const sel = qs('#regIncType'); if (!sel) { return; }
+      sel.innerHTML = getIncomeTypes().map(function (t) { return '<option value="' + escapeHtml(t) + '">' + escapeHtml(t) + '</option>'; }).join('');
+    }
+    function switchSettingsTab(tab) {
+      ['general', 'regular-income', 'regular-exp'].forEach(function (t) {
+        const btn = qs('#stab-' + t); const panel = qs('#spanel-' + t);
+        if (btn) { btn.classList.toggle('active', t === tab); }
+        if (panel) { panel.style.display = t === tab ? '' : 'none'; }
+      });
+      if (tab === 'regular-income') { populateRegIncTypeDropdown(); renderRegularIncomeList(); }
+      if (tab === 'regular-exp') { renderRegularExpList(); }
+    }
+    function taperRate(giftDate) {
+      const gd = new Date(giftDate);
+      const now = new Date();
+      const diffMs = now - gd;
+      if (diffMs < 0) { return { years: 0, rate: 40, status: 'Future', exempt: false }; }
+      const years = diffMs / (365.25 * 24 * 3600 * 1000);
+      if (years >= 7) { return { years: years, rate: 0, status: 'Fully exempt (7+ years)', exempt: true }; }
+      let rate = 40;
+      if (years >= 6) { rate = 8; }
+      else if (years >= 5) { rate = 16; }
+      else if (years >= 4) { rate = 24; }
+      else if (years >= 3) { rate = 32; }
+      const daysLeft = Math.max(0, Math.ceil((gd.getTime() + 7 * 365.25 * 24 * 3600 * 1000 - now.getTime()) / (24 * 3600 * 1000)));
+      const yrs = Math.floor(years);
+      const mos = Math.floor((years - yrs) * 12);
+      return { years: years, rate: rate, status: yrs + 'y ' + mos + 'm elapsed — ' + daysLeft + ' days to full exemption', exempt: false };
+    }
+    function allSyTaxYears() {
+      const now = new Date(); const year = now.getFullYear(); const boundary = new Date(year, 3, 6);
+      const curStartYear = now >= boundary ? year : year - 1;
+      const years = new Set();
+      for (let i = 0; i <= 14; i++) { const sy2 = curStartYear - i; years.add(sy2 + '/' + String(sy2 + 1).slice(-2)); }
+      (state.data.sevenYearGifts || []).forEach(function (g) { if (g.date) { years.add(taxYearLabel(g.date)); } });
+      return Array.from(years).sort().reverse();
+    }
+    function renderSyTaxYearSelect() {
+      const sel = qs('#syTaxYearSelect'); if (!sel) { return; }
+      const years = allSyTaxYears(); const cur = sel.value;
+      sel.innerHTML = '<option value="all">All tax years</option>' + years.map(function (y) { return '<option value="' + escapeHtml(y) + '">' + escapeHtml(y) + '</option>'; }).join('');
+      if (cur && (cur === 'all' || years.includes(cur))) { sel.value = cur; } else { sel.value = years[0] || 'all'; }
+    }
+    function renderSevenYearTable() {
+      const tbody = qs('#syRows'); if (!tbody) { return; }
+      renderSyTaxYearSelect();
+      const selYear = (qs('#syTaxYearSelect') || {}).value || '';
+      const hdg = qs('#syTableHeading');
+      if (hdg) { hdg.textContent = selYear === 'all' ? '7 Year Rule gifts — All tax years' : '7 Year Rule gifts — ' + selYear; }
+      const gifts = (state.data.sevenYearGifts || []).filter(function (g) { return !selYear || selYear === 'all' || taxYearLabel(g.date) === selYear; }).slice().sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
+      tbody.innerHTML = gifts.map(function (g) {
+        const tr = taperRate(g.date);
+        const statusColor = tr.exempt ? '#01696f' : (tr.rate >= 40 ? '#a12c7b' : '#964219');
+        const fileList = (g.proofFiles && g.proofFiles.length) ? g.proofFiles.map(function (f) { return '<a href="/proofs/' + encodeURIComponent(f) + '" target="_blank" style="font-size:0.8rem;display:block;">' + escapeHtml(f) + '</a>'; }).join('') : '<span class="muted" style="font-size:0.8rem;">None</span>';
+        return '<tr>' +
+          '<td>' + escapeHtml(g.date) + '</td>' +
+          '<td>' + escapeHtml(taxYearLabel(g.date)) + '</td>' +
+          '<td>' + escapeHtml(g.recipient || '') + '</td>' +
+          '<td>' + fmt.format(Number(g.amount || 0)) + '</td>' +
+          '<td><span style="font-size:0.8rem;padding:2px 8px;border-radius:12px;background:' + (g.giftType === 'CLT' ? '#e0ced7' : '#cedcd8') + ';">' + escapeHtml(g.giftType || 'PET') + '</span></td>' +
+          '<td>' + escapeHtml(g.relationship || '') + '</td>' +
+          '<td>' + Math.floor(tr.years) + 'y ' + Math.floor((tr.years % 1) * 12) + 'm</td>' +
+          '<td style="font-size:0.82rem;color:' + statusColor + ';font-weight:600;">' + escapeHtml(tr.status) + '</td>' +
+          '<td style="font-weight:700;color:' + statusColor + ';">' + tr.rate + '%</td>' +
+          '<td>' + escapeHtml(g.proofReference || '') + '</td>' +
+          '<td>' + fileList + '</td>' +
+          '<td style="white-space:nowrap;"><button class="action danger" style="padding:4px 10px;font-size:0.8rem;" data-delete-sy="' + escapeHtml(g.id) + '">Delete</button></td>' +
+          '</tr>';
+      }).join('') || '<tr><td colspan="12" class="muted">No 7 year rule gifts for ' + escapeHtml(selYear) + '.</td></tr>';
+      tbody.querySelectorAll('[data-delete-sy]').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+          if (!confirm('Delete this gift?')) { return; }
+          const result = await fetchJson('/api/seven-year-gifts/' + encodeURIComponent(btn.getAttribute('data-delete-sy')), { method: 'DELETE' });
+          state.data = result.data; renderSevenYearTable();
+        });
+      });
+    }
+    function expKey(year, month, mode) { return 'exp_' + year + '_' + month + '_' + mode; }
+    function getExpData(year, month, mode) {
+      if (!state.data.expTables) { state.data.expTables = {}; }
+      const key = expKey(year, month, mode);
+      if (!state.data.expTables[key]) {
+        state.data.expTables[key] = { rows: [{ name: '', amount: '', description: '' }], incomeTypes: [] };
+      }
+      return state.data.expTables[key];
+    }
+    function allExpenseNames(mode) {
+      const names = new Set();
+      if (!state.data.expTables) { return []; }
+      Object.keys(state.data.expTables).forEach(function (key) {
+        if (key.endsWith('_' + mode)) {
+          const tbl = state.data.expTables[key];
+          if (tbl && tbl.rows) { tbl.rows.forEach(function (row) { if (row.name && row.name.trim()) { names.add(row.name.trim()); } }); }
+        }
+      });
+      return Array.from(names).sort();
+    }
+    function buildExpYearOptions() {
+      const sel = qs('#expYearSelect'); if (!sel) { return; }
+      const years = [];
+      if (state.data.expTables) { Object.keys(state.data.expTables).forEach(function (k) { const parts = k.split('_'); if (parts[1] && !years.includes(parts[1])) { years.push(parts[1]); } }); }
+      const curYear = String(new Date().getFullYear());
+      if (!years.includes(curYear)) { years.push(curYear); }
+      years.sort();
+      sel.innerHTML = years.map(function (y) { return '<option value="' + y + '"' + (String(expYear) === y ? ' selected' : '') + '>' + y + '</option>'; }).join('');
+    }
+    function buildExpMonthOptions() {
+      const sel = qs('#expMonthSelect'); if (!sel) { return; }
+      sel.innerHTML = MONTHS.map(function (m, i) { return '<option value="' + i + '"' + (expMonth === i ? ' selected' : '') + '>' + m + '</option>'; }).join('');
+    }
+    function renderExpNameDatalist() {
+      let dl = document.getElementById('expNameDatalist');
+      if (!dl) { dl = document.createElement('datalist'); dl.id = 'expNameDatalist'; document.body.appendChild(dl); }
+      dl.innerHTML = allExpenseNames(expMode).map(function (n) { return '<option value="' + escapeHtml(n) + '">'; }).join('');
+    }
+    function renderExpRowTable() {
+      buildExpYearOptions();
+      buildExpMonthOptions();
+      buildIncomeTypeCheckboxes();
+      const mode = expMode;
+      const year = expYear;
+      const month = expMonth;
+      const data = getExpData(year, month, mode);
+      const modeLabel = qs('#expModeLabel');
+      const incomeTypeRow = qs('#expIncomeTypeRow');
+      if (modeLabel) { modeLabel.textContent = (mode === 'income' ? 'Income' : 'Expenditure') + ' — ' + MONTHS[month] + ' ' + year; }
+      if (incomeTypeRow) { incomeTypeRow.style.display = mode === 'income' ? '' : 'none'; }
+      if (mode === 'income' && data.incomeTypes && data.incomeTypes.length) {
+        data.incomeTypes.forEach(function (t) { const cb = document.querySelector('input[name="expIncomeType"][value="' + t + '"]'); if (cb) { cb.checked = true; } });
+        const summary = qs('#incomeTypePicker summary');
+        if (summary) { summary.textContent = data.incomeTypes.join(', '); }
+      }
+      qs('#expModeIncome').className = mode === 'income' ? 'action exp-mode-active' : 'action ghost';
+      qs('#expModeExpenditure').className = mode === 'expenditure' ? 'action exp-mode-active' : 'action ghost';
+      renderExpNameDatalist();
+      const tbody = qs('#expRowTableBody');
+      const tfoot = qs('#expRowTableFoot');
+      tbody.innerHTML = '';
+      const nameHdr = document.getElementById('expColNameHeader');
+      const typeHdr = document.getElementById('expColTypeHeader');
+      if (nameHdr) { nameHdr.textContent = mode === 'income' ? 'Income name' : 'Expense name'; }
+      if (typeHdr) { typeHdr.textContent = mode === 'income' ? 'Income type' : 'Category'; }
+      renderExpCategoryDatalist();
+      data.rows.forEach(function (row, idx) { addExpRowToTable(tbody, row, idx, data, mode); });
+      updateExpFooter(data, tfoot);
+    }
+    function allCategoryNames() {
+      const names = new Set();
+      if (!state.data.expTables) { return []; }
+      Object.keys(state.data.expTables).forEach(function (key) {
+        if (key.endsWith('_expenditure')) {
+          const tbl = state.data.expTables[key];
+          if (tbl && tbl.rows) { tbl.rows.forEach(function (r) { if (r.category && r.category.trim()) { names.add(r.category.trim()); } }); }
+        }
+      });
+      return Array.from(names).sort();
+    }
+    function renderExpCategoryDatalist() {
+      let dl = document.getElementById('expCategoryDatalist');
+      if (!dl) { dl = document.createElement('datalist'); dl.id = 'expCategoryDatalist'; document.body.appendChild(dl); }
+      dl.innerHTML = allCategoryNames().map(function (n) { return '<option value="' + escapeHtml(n) + '">'; }).join('');
+    }
+    function addExpRowToTable(tbody, row, idx, data, mode) {
+      const tr = document.createElement('tr');
+      tr.setAttribute('data-row-idx', idx);
+      const namePlaceholder = mode === 'income' ? 'Income name' : 'Expense name';
+      const typeCell = mode === 'income'
+        ? '<td><select class="exp-itype-select" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:#fff;font-size:0.92rem;">' +
+            getIncomeTypes().map(function (t) { return '<option value="' + escapeHtml(t) + '"' + (row.incomeType === t ? ' selected' : '') + '>' + escapeHtml(t) + '</option>'; }).join('') +
+          '</select></td>'
+        : '<td><input type="text" list="expCategoryDatalist" value="' + escapeHtml(row.category || '') + '" placeholder="Category" class="exp-category-input" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:#fff;font-size:0.92rem;"></td>';
+      tr.innerHTML = '<td><input type="text" list="expNameDatalist" value="' + escapeHtml(row.name || '') + '" placeholder="' + namePlaceholder + '" class="exp-name-input" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:#fff;font-size:0.92rem;"></td>' +
+        '<td><div class="gbp-wrap" style="margin:0;"><span class="gbp-prefix">&pound;</span><input type="number" min="0" step="0.01" value="' + escapeHtml(String(row.amount || '')) + '" placeholder="0.00" class="exp-amount-input"></div></td>' +
+        typeCell +
+        '<td><input type="text" value="' + escapeHtml(row.description || '') + '" placeholder="Description" class="exp-desc-input" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:#fff;font-size:0.92rem;"></td>' +
+        '<td><button type="button" class="action danger" style="padding:5px 9px;font-size:0.8rem;" data-remove-row="' + idx + '">x</button></td>';
+      tbody.appendChild(tr);
+      tr.querySelector('.exp-name-input').addEventListener('change', function (e) { data.rows[idx].name = e.target.value; renderExpNameDatalist(); });
+      tr.querySelector('.exp-amount-input').addEventListener('input', function (e) { data.rows[idx].amount = e.target.value; const tfoot = qs('#expRowTableFoot'); updateExpFooter(data, tfoot); });
+      tr.querySelector('.exp-desc-input').addEventListener('change', function (e) { data.rows[idx].description = e.target.value; });
+      if (mode === 'income') {
+        tr.querySelector('.exp-itype-select').addEventListener('change', function (e) { data.rows[idx].incomeType = e.target.value; });
+      } else {
+        tr.querySelector('.exp-category-input').addEventListener('change', function (e) { data.rows[idx].category = e.target.value; renderExpCategoryDatalist(); });
+      }
+      tr.querySelector('[data-remove-row]').addEventListener('click', async function () {
+        data.rows.splice(idx, 1);
+        renderExpRowTable();
+        // auto-save so dashboard reflects the deletion immediately
+        if (!state.data.expTables) { state.data.expTables = {}; }
+        const result = await fetchJson('/api/exp-tables', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expTables: state.data.expTables }) });
+        state.data = result.data;
+        renderDashboard();
+      });
+    }
+    function updateExpFooter(data, tfoot) {
+      const total = data.rows.reduce(function (s, row) { return s + (Number(row.amount) || 0); }, 0);
+      tfoot.innerHTML = '<tr><td style="font-weight:700;padding:10px 12px;">Total</td><td style="font-weight:700;padding:10px 12px;">' + fmt.format(total) + '</td><td colspan="3"></td></tr>';
+    }
+    qs('#dashTaxYearSelect') && qs('#dashTaxYearSelect').addEventListener('change', function () { renderDashboard(); });
+    qs('#expModeIncome') && qs('#expModeIncome').addEventListener('click', function () { expMode = 'income'; renderExpRowTable(); });
+    qs('#expModeExpenditure') && qs('#expModeExpenditure').addEventListener('click', function () { expMode = 'expenditure'; renderExpRowTable(); });
+    qs('#expYearSelect') && qs('#expYearSelect').addEventListener('change', function () { expYear = Number(qs('#expYearSelect').value); renderExpRowTable(); });
+    qs('#expMonthSelect') && qs('#expMonthSelect').addEventListener('change', function () { expMonth = Number(qs('#expMonthSelect').value); renderExpRowTable(); });
+    qs('#addExpYearBtn') && qs('#addExpYearBtn').addEventListener('click', function () { const yr = prompt('Enter a year (e.g. 2024):'); if (yr && /^[0-9]{4}$/.test(yr.trim())) { expYear = Number(yr.trim()); if (!state.data.expTables) { state.data.expTables = {}; } renderExpRowTable(); } });
+    qs('#addExpRowBtn') && qs('#addExpRowBtn').addEventListener('click', function () { const data = getExpData(expYear, expMonth, expMode); data.rows.push({ name: '', amount: '', description: '' }); renderExpRowTable(); });
+    qs('#saveExpTableBtn') && qs('#saveExpTableBtn').addEventListener('click', async function () {
+      if (!state.data.expTables) { state.data.expTables = {}; }
+      const selectedIncomeTypes = Array.from(document.querySelectorAll('input[name="expIncomeType"]:checked')).map(function (input) { return input.value; });
+      const key = expKey(expYear, expMonth, expMode);
+      if (state.data.expTables[key]) { state.data.expTables[key].incomeTypes = selectedIncomeTypes; }
+      await fetchJson('/api/exp-tables', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expTables: state.data.expTables }) });
+      qs('#expMessage').textContent = 'Saved.';
+      setTimeout(function () { const m = qs('#expMessage'); if (m) { m.textContent = ''; } }, 3000);
+    });
+    qs('#addIncomeTypeBtn') && qs('#addIncomeTypeBtn').addEventListener('click', async function () { const input = qs('#newIncomeTypeName'); const value = input.value.trim(); if (!value) { return; } if (!state.data.settings.incomeTypes) { state.data.settings.incomeTypes = DEFAULT_INCOME_TYPES.slice(); } state.data.settings.incomeTypes.push(value); input.value = ''; await saveSettings(); });
+    qsa('[data-page-target]').forEach(function (btn) { btn.addEventListener('click', function () { setPage(btn.getAttribute('data-page-target')); }); });
+    qs('#btnTaxYearReport') && qs('#btnTaxYearReport').addEventListener('click', async function () {
+      const ty = getReportTaxYear();
+      const url = ty === 'all' ? '/api/reports/tax-year' : '/api/reports/tax-year?year=' + encodeURIComponent(ty);
+      const payload = await fetchJson(url); buildTaxYearReport(payload.gifts || [], ty);
+    });
+    qs('#btnGeneralReport') && qs('#btnGeneralReport').addEventListener('click', async function () {
+      const ty = getReportTaxYear();
+      const url = ty === 'all' ? '/api/reports/general' : '/api/reports/general?year=' + encodeURIComponent(ty);
+      const payload = await fetchJson(url); buildGeneralReport(payload, ty);
+    });
+    qs('#btnIht403Pdf') && qs('#btnIht403Pdf').addEventListener('click', function () {
+      const ty = getReportTaxYear();
+      const url = ty === 'all' ? '/api/pdf/iht403' : '/api/pdf/iht403?year=' + encodeURIComponent(ty);
+      downloadPdf(url, ty === 'all' ? 'iht403-schedule.pdf' : 'iht403-' + ty.replace('/', '-') + '.pdf');
+    });
+    qs('#btnGeneralPdf') && qs('#btnGeneralPdf').addEventListener('click', function () {
+      const ty = getReportTaxYear();
+      const url = ty === 'all' ? '/api/pdf/general' : '/api/pdf/general?year=' + encodeURIComponent(ty);
+      downloadPdf(url, ty === 'all' ? 'general-gifts-report.pdf' : 'general-gifts-' + ty.replace('/', '-') + '.pdf');
+    });
+    qs('#btnExpAuditPdf') && qs('#btnExpAuditPdf').addEventListener('click', function () {
+      const ty = getReportTaxYear();
+      const url = ty === 'all' ? '/api/pdf/exp-audit' : '/api/pdf/exp-audit?year=' + encodeURIComponent(ty);
+      downloadPdf(url, ty === 'all' ? 'expenditure-audit.pdf' : 'expenditure-audit-' + ty.replace('/', '-') + '.pdf');
+    });
+    qs('#btnExpAuditCsv') && qs('#btnExpAuditCsv').addEventListener('click', function () {
+      const ty = getReportTaxYear();
+      const url = ty === 'all' ? '/api/csv/exp-audit' : '/api/csv/exp-audit?year=' + encodeURIComponent(ty);
+      downloadPdf(url, ty === 'all' ? 'expenditure-audit.csv' : 'expenditure-audit-' + ty.replace('/', '-') + '.csv');
+    });
+    qs('#btnPrintReport') && qs('#btnPrintReport').addEventListener('click', function () { if (!qs('#reportOutput').textContent.trim()) { return; } window.print(); });
+    qs('#importBackupBtn') && qs('#importBackupBtn').addEventListener('click', async function () {
+      const fileInput = qs('#backupFile');
+      const msgEl = qs('#backupMessage');
+      if (!fileInput.files.length) { msgEl.textContent = 'Choose a backup zip file first.'; return; }
+      msgEl.textContent = 'Importing...';
+      try {
+        const formData = new FormData();
+        formData.append('backup', fileInput.files[0]);
+        const response = await fetch('/api/backup/import', { method: 'POST', body: formData });
+        const result = await response.json();
+        if (!response.ok) { throw new Error(result.error || 'Import failed'); }
+        if (result.data) { state.data = result.data; }
+        if (!state.data.settings.incomeTypes || !state.data.settings.incomeTypes.length) { state.data.settings.incomeTypes = DEFAULT_INCOME_TYPES.slice(); }
+        if (!state.data.expTables) { state.data.expTables = {}; }
+        applyDisplaySettings();
+        renderRecipients();
+        renderIncomeTypeSettings();
+        buildGiftIncomeTypeOptions();
+        renderExpRowTable();
+        renderAllowanceSummary();
+        renderAllowanceTable();
+        renderDashboard();
+        renderRegularIncomeList();
+        renderRegularExpList();
+        populateSettingsForm();
+        qs('#reportOutput').innerHTML = '';
+        msgEl.textContent = 'Backup imported successfully.';
+        fileInput.value = '';
+      } catch (err) {
+        qs('#backupMessage').textContent = 'Import failed: ' + err.message;
+      }
+    });
+    async function downloadPdf(url, filename) {
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) {
+          const text = await resp.text();
+          alert('Download failed: ' + (text || resp.statusText));
+          return;
+        }
+        const blob = await resp.blob();
+        if (blob.size < 100) {
+          alert('The report has no data to display. Please add some gift records first.');
+          return;
+        }
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+      } catch (err) {
+        alert('Download error: ' + err.message);
+      }
+    }
+    loadState();
