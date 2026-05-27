@@ -337,6 +337,7 @@ app.post('/api/gifts', function (req, res) {
   gift.proofReference = gift.proofReference || '';
   db.gifts.push(gift);
   writeDb(db);
+  auditLog('gift_create', { id: gift.id, recipient: gift.recipient, amount: gift.amount });
   res.json({ ok: true, gift: gift, data: db });
 });
 
@@ -389,6 +390,7 @@ app.delete('/api/gifts/:id', function (req, res) {
   }
   db.gifts = db.gifts.filter(function (g) { return g.id !== req.params.id; });
   writeDb(db);
+  auditLog('gift_delete', { id: req.params.id });
   res.json({ ok: true });
 });
 
